@@ -385,6 +385,8 @@ export default function Home() {
       audio.preload = 'auto';
       audio.setAttribute('playsinline', '');
       audio.setAttribute('webkit-playsinline', '');
+      audio.style.display = 'none';
+      document.body.appendChild(audio);
 
       const source = ctx.createMediaElementSource(audio);
       const postGain = ctx.createGain();
@@ -427,6 +429,7 @@ export default function Home() {
     setTimeout(() => {
       try { a.audio.pause(); a.audio.src = ''; a.audio.load(); } catch {}
       try { a.source.disconnect(); a.postGain.disconnect(); } catch {}
+      try { if (a.audio.parentNode) a.audio.parentNode.removeChild(a.audio); } catch {}
     }, fadeMs + 120);
     ambientRef.current = null;
   }
