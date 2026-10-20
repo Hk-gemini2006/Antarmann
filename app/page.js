@@ -23,7 +23,7 @@ const TECHNIQUES = {
 };
 
 const SPEECH_RMS = 0.02;
-const SILENCE_MS = 900;
+const SILENCE_MS = 400;
 
 // Barge-in: how confidently the mic has to hear real speech, while
 // Antarmann is talking, before it stops itself and listens. Higher
@@ -602,6 +602,9 @@ export default function Home() {
           if (silenceStartRef.current === null) {
             silenceStartRef.current = now;
             lastUtteranceDurationMsRef.current = Math.max(300, now - firstSpeechAtRef.current);
+            // Show thinking immediately when silence begins — user sees
+            // instant feedback rather than waiting for the full SILENCE_MS.
+            if (modeRef.current === 'grounding') setPhase('thinking');
           } else if (now - silenceStartRef.current > SILENCE_MS) {
             finishSpeaking();
           }
@@ -712,6 +715,14 @@ export default function Home() {
       }).then(r => r.json());
       if (!c.reply) throw new Error(c.error || 'No reply');
 
+      // Start TTS fetch immediately in parallel — don't wait for history
+      // updates or other logic. This hides most of the TTS latency.
+      const ttsPromise = fetch('/api/speak', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: c.reply }),
+      }).then(r => (r.ok ? r.blob() : null)).catch(() => null);
+
       historyRef.current = [
         ...historyRef.current,
         { role: 'user', content: text },
@@ -726,15 +737,11 @@ export default function Home() {
 
       if (c.phase === 'practice' && c.technique) {
         // This reply is the first instruction of a practice the person
-        // just agreed to. Start fetching its voice now, but don't play
-        // it yet — a brief settling countdown goes first, so beginning
+        // just agreed to. ttsPromise is already in flight — don't play
+        // it yet. A brief settling countdown goes first so beginning
         // feels like crossing a threshold rather than the app just
         // continuing to talk.
-        const instructionPromise = fetch('/api/speak', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: c.reply }),
-        }).then(r => (r.ok ? r.blob() : null)).catch(() => null);
+        const instructionPromise = ttsPromise;
 
         const family = TECHNIQUES[c.technique]?.family;
         const prepMs = PREP_SHORT_KEYS.has(c.technique) ? PREP_MS_SHORT : PREP_MS_DEFAULT;
@@ -770,13 +777,8 @@ export default function Home() {
         return;
       }
 
-      const res = await fetch('/api/speak', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: c.reply }),
-      });
-      if (!res.ok) throw new Error('Voice unavailable');
-      const audioBlob = await res.blob();
+      const audioBlob = await ttsPromise;
+      if (!audioBlob) throw new Error('Voice unavailable');
       if (!activeRef.current) return;
 
       setPhase('speaking');
