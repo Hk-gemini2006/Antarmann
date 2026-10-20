@@ -202,6 +202,9 @@ export default function Home() {
   // and name-question flow that bypasses /api/chat.
   async function speakRaw(text) {
     if (!activeRef.current) return { interrupted: false };
+    // Resume AudioContext before every TTS play — critical on mobile Chrome.
+    const ctx = audioCtxRef.current;
+    if (ctx && ctx.state !== 'running') { try { await ctx.resume(); } catch (e) {} }
     try {
       setPhase('speaking');
       const res = await fetch('/api/speak', {
@@ -309,7 +312,10 @@ export default function Home() {
   // ── Plays a TTS reply while the mic stays live for a real barge-in.
   // Resolves { interrupted: true } the moment real speech is detected
   // over Antarmann's own voice; { interrupted: false } on natural end.
-  function playInterruptible(blob) {
+  async function playInterruptible(blob) {
+    // Resume AudioContext before playing — mobile Chrome suspends it after async gaps.
+    const ctx = audioCtxRef.current;
+    if (ctx && ctx.state !== 'running') { try { await ctx.resume(); } catch (e) {} }
     return new Promise(resolve => {
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
@@ -1051,6 +1057,9 @@ export default function Home() {
 
   // ── The orb is the only control ─────────────────────────────
   function handleOrbClick() {
+    // Resume AudioContext synchronously on every tap — mobile Chrome
+    // suspends it after async gaps; this keeps it alive.
+    if (audioCtxRef.current) audioCtxRef.current.resume().catch(() => {});
     const p = phaseRef.current;
     if (p === 'idle') return startSession();
     if (p === 'listening' && hasSpokenRef.current) return finishSpeaking();
