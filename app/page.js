@@ -239,8 +239,11 @@ export default function Home() {
         audio: { echoCancellation: true, noiseSuppression: true },
       });
       streamRef.current = stream;
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      // AudioContext was already created synchronously in handleOrbClick
+      // to preserve the mobile gesture unlock — reuse it here.
+      const ctx = audioCtxRef.current || new (window.AudioContext || window.webkitAudioContext)();
       audioCtxRef.current = ctx;
+      await ctx.resume().catch(() => {});
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 1024;
       ctx.createMediaStreamSource(stream).connect(analyser);
@@ -313,12 +316,23 @@ export default function Home() {
   // Resolves { interrupted: true } the moment real speech is detected
   // over Antarmann's own voice; { interrupted: false } on natural end.
   async function playInterruptible(blob) {
-    // Resume AudioContext before playing — mobile Chrome suspends it after async gaps.
+    // Always resume AudioContext before playing.
     const ctx = audioCtxRef.current;
     if (ctx && ctx.state !== 'running') { try { await ctx.resume(); } catch (e) {} }
     return new Promise(resolve => {
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
+      // Route through Web Audio graph so mobile Chrome honours the unlock
+      // we did at tap time. Without this, Audio.play() can still be blocked
+      // on mobile even when the AudioContext itself is running.
+      if (ctx) {
+        try {
+          const src = ctx.createMediaElementSource(audio);
+          src.connect(ctx.destination);
+        } catch (e) {
+          // If createMediaElementSource fails (e.g. already connected), play directly.
+        }
+      }
       audioRef.current = audio;
       audioResolveRef.current = resolve;
       speakingAudioStartRef.current = performance.now();
@@ -1057,11 +1071,38 @@ export default function Home() {
 
   // ── The orb is the only control ─────────────────────────────
   function handleOrbClick() {
-    // Resume AudioContext synchronously on every tap — mobile Chrome
-    // suspends it after async gaps; this keeps it alive.
-    if (audioCtxRef.current) audioCtxRef.current.resume().catch(() => {});
     const p = phaseRef.current;
-    if (p === 'idle') return startSession();
+
+    if (p === 'idle') {
+      // ── Mobile Chrome audio unlock ──────────────────────────────
+      // Create and unlock the AudioContext HERE, synchronously inside
+      // the tap handler, BEFORE any await. Mobile Chrome's autoplay
+      // policy closes the "user gesture window" the instant any async
+      // operation (getUserMedia, fetch, etc.) is awaited. By creating
+      // the context now and playing a silent buffer through it, we
+      // permanently unlock audio for this page load — all subsequent
+      // Audio().play() and ctx.resume() calls will succeed regardless
+      // of how many awaits have happened since.
+      if (!audioCtxRef.current) {
+        try {
+          const ctx = new (window.AudioContext || window.webkitAudioContext)();
+          audioCtxRef.current = ctx;
+          // Play a silent 1-sample buffer — this is the unlock gesture.
+          const buf = ctx.createBuffer(1, 1, 22050);
+          const src = ctx.createBufferSource();
+          src.buffer = buf;
+          src.connect(ctx.destination);
+          src.start(0);
+          ctx.resume().catch(() => {});
+        } catch (e) {}
+      } else {
+        audioCtxRef.current.resume().catch(() => {});
+      }
+      return startSession();
+    }
+
+    // For all other states, resume AudioContext on every tap too.
+    if (audioCtxRef.current) audioCtxRef.current.resume().catch(() => {});
     if (p === 'listening' && hasSpokenRef.current) return finishSpeaking();
     // Check paused first — pausePractice sets phase to 'preparing',
     // so we must handle resume before the 'preparing' branch runs.
