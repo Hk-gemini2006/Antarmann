@@ -106,6 +106,7 @@ export default function Home() {
   const levelRef = useRef(0);
   const audioRef = useRef(null);
   const audioResolveRef = useRef(null);
+  const iosUnlockedRef = useRef(null); // pre-unlocked Audio element for iOS
   const rootRef = useRef(null);
   const isProcessingRef = useRef(false);
 
@@ -321,29 +322,29 @@ export default function Home() {
     if (ctx && ctx.state !== 'running') { try { await ctx.resume(); } catch (e) {} }
     return new Promise(resolve => {
       const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
+      // Reuse the pre-unlocked iOS audio element if available (swap src),
+      // otherwise create a new one. Reusing avoids needing a new gesture.
+      const audio = iosUnlockedRef.current || new Audio();
       audio.setAttribute('playsinline', '');
       audio.setAttribute('webkit-playsinline', '');
-      // iOS WebKit requires the audio element to be in the DOM to play
-      // a blob URL. Attach it hidden, remove it after playback ends.
-      audio.style.display = 'none';
-      document.body.appendChild(audio);
+      if (!audio.parentNode) {
+        audio.style.display = 'none';
+        document.body.appendChild(audio);
+      }
+      audio.src = url;
+      audio.load();
       audioRef.current = audio;
       audioResolveRef.current = resolve;
       speakingAudioStartRef.current = performance.now();
       interruptVoiceStartRef.current = null;
-      const cleanup = () => {
-        URL.revokeObjectURL(url);
-        try { document.body.removeChild(audio); } catch {}
-      };
       audio.onended = () => {
-        cleanup();
+        URL.revokeObjectURL(url);
         if (audioRef.current === audio) audioRef.current = null;
         audioResolveRef.current = null;
         resolve({ interrupted: false });
       };
       audio.play().catch(() => {
-        cleanup();
+        URL.revokeObjectURL(url);
         if (audioRef.current === audio) audioRef.current = null;
         audioResolveRef.current = null;
         resolve({ interrupted: false });
@@ -1076,20 +1077,30 @@ export default function Home() {
     const p = phaseRef.current;
 
     if (p === 'idle') {
-      // ── Mobile Chrome audio unlock ──────────────────────────────
-      // Create and unlock the AudioContext HERE, synchronously inside
-      // the tap handler, BEFORE any await. Mobile Chrome's autoplay
-      // policy closes the "user gesture window" the instant any async
-      // operation (getUserMedia, fetch, etc.) is awaited. By creating
-      // the context now and playing a silent buffer through it, we
-      // permanently unlock audio for this page load — all subsequent
-      // Audio().play() and ctx.resume() calls will succeed regardless
-      // of how many awaits have happened since.
+      // ── iOS / mobile audio unlock ───────────────────────────────
+      // On iOS WebKit, Audio.play() is only allowed synchronously
+      // inside a user gesture. Once any await (getUserMedia, fetch)
+      // happens the gesture is gone. The fix: create a real Audio
+      // element NOW (synchronously), play a silent inline MP3 through
+      // it, then reuse that SAME element for all TTS playback by
+      // swapping its src. iOS allows src-swapping on an already-
+      // unlocked element without needing a new gesture.
+      if (!iosUnlockedRef.current) {
+        // Shortest valid MP3: 1 frame of silence, base64-encoded.
+        const SILENT_MP3 = 'data:audio/mpeg;base64,SUQzBAAAAAABEVRYWFgAAAAtAAADY29tbWVudABCaWdTb3VuZEJhbmsgU291bmQgRWZmZWN0cwBUWFhYAAAADwAAAFNvdW5kIEVmZmVjdABUQUxCAAAACQAAAFNvdW5kAP/+kgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==';
+        const a = new Audio(SILENT_MP3);
+        a.setAttribute('playsinline', '');
+        a.setAttribute('webkit-playsinline', '');
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.play().catch(() => {});
+        iosUnlockedRef.current = a;
+      }
+      // Unlock AudioContext too
       if (!audioCtxRef.current) {
         try {
           const ctx = new (window.AudioContext || window.webkitAudioContext)();
           audioCtxRef.current = ctx;
-          // Play a silent 1-sample buffer — this is the unlock gesture.
           const buf = ctx.createBuffer(1, 1, 22050);
           const src = ctx.createBufferSource();
           src.buffer = buf;
