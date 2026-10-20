@@ -322,17 +322,8 @@ export default function Home() {
     return new Promise(resolve => {
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
-      // Route through Web Audio graph so mobile Chrome honours the unlock
-      // we did at tap time. Without this, Audio.play() can still be blocked
-      // on mobile even when the AudioContext itself is running.
-      if (ctx) {
-        try {
-          const src = ctx.createMediaElementSource(audio);
-          src.connect(ctx.destination);
-        } catch (e) {
-          // If createMediaElementSource fails (e.g. already connected), play directly.
-        }
-      }
+      audio.setAttribute('playsinline', '');
+      audio.setAttribute('webkit-playsinline', '');
       audioRef.current = audio;
       audioResolveRef.current = resolve;
       speakingAudioStartRef.current = performance.now();
@@ -382,6 +373,8 @@ export default function Home() {
       audio.loop = true;
       audio.volume = 1.0;
       audio.preload = 'auto';
+      audio.setAttribute('playsinline', '');
+      audio.setAttribute('webkit-playsinline', '');
 
       const source = ctx.createMediaElementSource(audio);
       const postGain = ctx.createGain();
