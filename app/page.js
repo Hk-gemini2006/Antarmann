@@ -300,6 +300,13 @@ export default function Home() {
     audioCtxRef.current?.close();
     streamRef.current = null;
     audioCtxRef.current = null;
+    // Reset iOS unlock element so next session re-unlocks cleanly.
+    try {
+      if (iosUnlockedRef.current && iosUnlockedRef.current.parentNode) {
+        iosUnlockedRef.current.parentNode.removeChild(iosUnlockedRef.current);
+      }
+    } catch {}
+    iosUnlockedRef.current = null;
     analyserRef.current = null;
     historyRef.current = [];
     levelRef.current = 0;
@@ -381,57 +388,83 @@ export default function Home() {
     try {
       const audio = new Audio(src);
       audio.loop = true;
-      audio.volume = 1.0;
+      audio.volume = 0;
       audio.preload = 'auto';
       audio.setAttribute('playsinline', '');
       audio.setAttribute('webkit-playsinline', '');
       audio.style.display = 'none';
       document.body.appendChild(audio);
 
-      const source = ctx.createMediaElementSource(audio);
-      const postGain = ctx.createGain();
-      postGain.gain.value = 0;
-      source.connect(postGain);
-      postGain.connect(ctx.destination);
-
       await audio.play();
 
-      const now = ctx.currentTime;
-      postGain.gain.setValueAtTime(0, now);
-      postGain.gain.linearRampToValueAtTime(AMBIENT_PREP_GAIN, now + 2.4);
+      // Fade volume in using audio.volume directly — avoids
+      // createMediaElementSource which breaks on iOS WebKit.
+      const fadeSteps = 24;
+      const fadeMs = 2400;
+      const target = AMBIENT_PREP_GAIN;
+      let step = 0;
+      const fadeTimer = setInterval(() => {
+        step++;
+        audio.volume = Math.min(target, (step / fadeSteps) * target);
+        if (step >= fadeSteps) clearInterval(fadeTimer);
+      }, fadeMs / fadeSteps);
 
-      ambientRef.current = { audio, source, postGain };
+      // Stub postGain so duckAmbient/stopAmbient callers don't crash.
+      const postGain = {
+        _audio: audio,
+        _fadeTimer: fadeTimer,
+        gain: { value: audio.volume },
+        cancelScheduledValues: () => {},
+        setValueAtTime: () => {},
+        linearRampToValueAtTime: (val) => { audio.volume = Math.max(0.0001, val); },
+      };
+
+      ambientRef.current = { audio, source: null, postGain };
     } catch (e) {}
   }
 
   function duckAmbient(targetGain = AMBIENT_PRACTICE_GAIN, fadeMs = 1800) {
     const a = ambientRef.current;
     if (!a) return;
-    const ctx = audioCtxRef.current;
-    const now = ctx.currentTime;
-    try {
-      a.postGain.gain.cancelScheduledValues(now);
-      a.postGain.gain.setValueAtTime(a.postGain.gain.value, now);
-      a.postGain.gain.linearRampToValueAtTime(targetGain, now + fadeMs / 1000);
-    } catch {}
+    // Fade audio.volume directly (works on iOS where Web Audio graph may not be used).
+    const steps = 20;
+    const interval = fadeMs / steps;
+    const start = a.audio.volume;
+    let step = 0;
+    const t = setInterval(() => {
+      step++;
+      a.audio.volume = Math.max(0, Math.min(1, start + (targetGain - start) * (step / steps)));
+      if (step >= steps) clearInterval(t);
+    }, interval);
   }
 
   function stopAmbient(fadeMs = 1500) {
     const a = ambientRef.current;
     if (!a) return;
-    const ctx = audioCtxRef.current;
-    const now = ctx ? ctx.currentTime : 0;
-    try {
-      a.postGain.gain.cancelScheduledValues(now);
-      a.postGain.gain.setValueAtTime(a.postGain.gain.value, now);
-      a.postGain.gain.linearRampToValueAtTime(0.0001, now + fadeMs / 1000);
-    } catch {}
-    setTimeout(() => {
-      try { a.audio.pause(); a.audio.src = ''; a.audio.load(); } catch {}
-      try { a.source.disconnect(); a.postGain.disconnect(); } catch {}
-      try { if (a.audio.parentNode) a.audio.parentNode.removeChild(a.audio); } catch {}
-    }, fadeMs + 120);
     ambientRef.current = null;
+    // Fade volume to 0 then stop — works whether or not Web Audio graph is used.
+    if (fadeMs <= 0) {
+      try { a.audio.pause(); a.audio.src = ''; a.audio.load(); } catch {}
+      try { if (a.source) a.source.disconnect(); } catch {}
+      try { if (a.postGain && a.postGain.disconnect) a.postGain.disconnect(); } catch {}
+      try { if (a.audio.parentNode) a.audio.parentNode.removeChild(a.audio); } catch {}
+      return;
+    }
+    const steps = 20;
+    const interval = fadeMs / steps;
+    const startVol = a.audio.volume;
+    let step = 0;
+    const t = setInterval(() => {
+      step++;
+      a.audio.volume = Math.max(0, startVol * (1 - step / steps));
+      if (step >= steps) {
+        clearInterval(t);
+        try { a.audio.pause(); a.audio.src = ''; a.audio.load(); } catch {}
+        try { if (a.source) a.source.disconnect(); } catch {}
+        try { if (a.postGain && a.postGain.disconnect) a.postGain.disconnect(); } catch {}
+        try { if (a.audio.parentNode) a.audio.parentNode.removeChild(a.audio); } catch {}
+      }
+    }, interval);
   }
 
   // ── Synthesized return-chime. The "awareness" variant is a soft,
