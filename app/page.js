@@ -106,7 +106,8 @@ export default function Home() {
   const levelRef = useRef(0);
   const audioRef = useRef(null);
   const audioResolveRef = useRef(null);
-  const iosUnlockedRef = useRef(null); // pre-unlocked Audio element for iOS
+  const iosUnlockedRef = useRef(null);        // pre-unlocked Audio element for TTS (iOS)
+  const iosAmbientUnlockedRef = useRef(null); // pre-unlocked Audio element for ambient (iOS)
   const rootRef = useRef(null);
   const isProcessingRef = useRef(false);
 
@@ -300,13 +301,19 @@ export default function Home() {
     audioCtxRef.current?.close();
     streamRef.current = null;
     audioCtxRef.current = null;
-    // Reset iOS unlock element so next session re-unlocks cleanly.
+    // Reset iOS unlock elements so next session re-unlocks cleanly.
     try {
       if (iosUnlockedRef.current && iosUnlockedRef.current.parentNode) {
         iosUnlockedRef.current.parentNode.removeChild(iosUnlockedRef.current);
       }
     } catch {}
     iosUnlockedRef.current = null;
+    try {
+      if (iosAmbientUnlockedRef.current && iosAmbientUnlockedRef.current.parentNode) {
+        iosAmbientUnlockedRef.current.parentNode.removeChild(iosAmbientUnlockedRef.current);
+      }
+    } catch {}
+    iosAmbientUnlockedRef.current = null;
     analyserRef.current = null;
     historyRef.current = [];
     levelRef.current = 0;
@@ -386,14 +393,21 @@ export default function Home() {
     const src = sessionAmbientRef.current || AMBIENT_POOL[0];
 
     try {
-      const audio = new Audio(src);
+      // Reuse the pre-unlocked ambient element (src-swap) — same pattern
+      // as TTS. A freshly created Audio element won't play on iOS after
+      // async gaps since the tap gesture is gone by then.
+      const audio = iosAmbientUnlockedRef.current || new Audio();
       audio.loop = true;
       audio.volume = 0;
       audio.preload = 'auto';
       audio.setAttribute('playsinline', '');
       audio.setAttribute('webkit-playsinline', '');
-      audio.style.display = 'none';
-      document.body.appendChild(audio);
+      if (!audio.parentNode) {
+        audio.style.display = 'none';
+        document.body.appendChild(audio);
+      }
+      audio.src = src;
+      audio.load();
 
       await audio.play();
 
@@ -1121,9 +1135,9 @@ export default function Home() {
       // it, then reuse that SAME element for all TTS playback by
       // swapping its src. iOS allows src-swapping on an already-
       // unlocked element without needing a new gesture.
+      // Shortest valid MP3: 1 frame of silence, base64-encoded.
+      const SILENT_MP3 = 'data:audio/mpeg;base64,SUQzBAAAAAABEVRYWFgAAAAtAAADY29tbWVudABCaWdTb3VuZEJhbmsgU291bmQgRWZmZWN0cwBUWFhYAAAADwAAAFNvdW5kIEVmZmVjdABUQUxCAAAACQAAAFNvdW5kAP/+kgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==';
       if (!iosUnlockedRef.current) {
-        // Shortest valid MP3: 1 frame of silence, base64-encoded.
-        const SILENT_MP3 = 'data:audio/mpeg;base64,SUQzBAAAAAABEVRYWFgAAAAtAAADY29tbWVudABCaWdTb3VuZEJhbmsgU291bmQgRWZmZWN0cwBUWFhYAAAADwAAAFNvdW5kIEVmZmVjdABUQUxCAAAACQAAAFNvdW5kAP/+kgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==';
         const a = new Audio(SILENT_MP3);
         a.setAttribute('playsinline', '');
         a.setAttribute('webkit-playsinline', '');
@@ -1131,6 +1145,18 @@ export default function Home() {
         document.body.appendChild(a);
         a.play().catch(() => {});
         iosUnlockedRef.current = a;
+      }
+      // Also unlock a SECOND element for ambient — iOS only allows one
+      // src-swap per element at a time; if TTS and ambient shared one
+      // element, swapping src for TTS would stop the ambient track.
+      if (!iosAmbientUnlockedRef.current) {
+        const b = new Audio(SILENT_MP3);
+        b.setAttribute('playsinline', '');
+        b.setAttribute('webkit-playsinline', '');
+        b.style.display = 'none';
+        document.body.appendChild(b);
+        b.play().catch(() => {});
+        iosAmbientUnlockedRef.current = b;
       }
       // Unlock AudioContext too
       if (!audioCtxRef.current) {
