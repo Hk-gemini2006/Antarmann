@@ -324,17 +324,26 @@ export default function Home() {
       const audio = new Audio(url);
       audio.setAttribute('playsinline', '');
       audio.setAttribute('webkit-playsinline', '');
+      // iOS WebKit requires the audio element to be in the DOM to play
+      // a blob URL. Attach it hidden, remove it after playback ends.
+      audio.style.display = 'none';
+      document.body.appendChild(audio);
       audioRef.current = audio;
       audioResolveRef.current = resolve;
       speakingAudioStartRef.current = performance.now();
       interruptVoiceStartRef.current = null;
-      audio.onended = () => {
+      const cleanup = () => {
         URL.revokeObjectURL(url);
+        try { document.body.removeChild(audio); } catch {}
+      };
+      audio.onended = () => {
+        cleanup();
         if (audioRef.current === audio) audioRef.current = null;
         audioResolveRef.current = null;
         resolve({ interrupted: false });
       };
       audio.play().catch(() => {
+        cleanup();
         if (audioRef.current === audio) audioRef.current = null;
         audioResolveRef.current = null;
         resolve({ interrupted: false });
