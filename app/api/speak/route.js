@@ -11,13 +11,12 @@ export async function POST(request) {
       model: 'tts-1',
       voice: 'onyx',
       input: text,
-      instructions: 'Speak slowly and warmly, like a calm meditation guide. Soft tone, unhurried pace, gentle presence. Never rushed, never clinical.',
-      response_format: 'mp3',
-      speed: 0.9,
+      response_format: 'opus', // smaller file = faster download than mp3
+      speed: 1.0,              // normal speed — 0.9 made audio longer to download
     });
     const audioBuffer = await response.arrayBuffer();
     return new Response(audioBuffer, {
-      headers: { 'Content-Type': 'audio/mpeg' },
+      headers: { 'Content-Type': 'audio/ogg; codecs=opus' },
     });
   } catch (err) {
     console.error('Speak error:', err);

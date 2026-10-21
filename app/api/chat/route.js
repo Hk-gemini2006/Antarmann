@@ -102,8 +102,8 @@ export async function POST(request) {
     const messages = [...(history || []), { role: 'user', content: message }];
 
     const response = await client.messages.create({
-      model: 'claude-sonnet-4-5',
-      max_tokens: 400,
+      model: 'claude-haiku-4-5',
+      max_tokens: 250,
       system: SYSTEM_PROMPT + paceContext(pace) + nameContext(userName),
       messages,
     });
